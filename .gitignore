@@ -1,0 +1,9 @@
+app/__pycache__/config.cpython-310.pyc
+app/__pycache__/handlers.cpython-310.pyc
+app/__pycache__/keyboards.cpython-310.pyc
+app/database/__pycache__/cache.cpython-310.pyc
+app/database/__pycache__/gsheets_setup.cpython-310.pyc
+app/database/__pycache__/requests.cpython-310.pyc
+.env
+bot.log
+credentials.json
