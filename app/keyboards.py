@@ -21,7 +21,8 @@ privacy_keyboard = InlineKeyboardMarkup(
 menu = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text='Каталог', callback_data='catalog')],
     [InlineKeyboardButton(text='🛒 Корзина', callback_data='cart')],
-    [InlineKeyboardButton(text='Контакты', callback_data='contacts')]
+    [InlineKeyboardButton(text='👨‍💼 Связаться с поддержкой', url=app_config.SUPPORT_URL)],
+    [InlineKeyboardButton(text='Информация о магазине', callback_data='about')],
 ])
 
 async def categories_keyboard_builder(): # Переименовал для ясности, что это builder
@@ -101,12 +102,13 @@ def get_items_keyboard(items: list, category_name: str, page: int = 1, items_per
         )
     
     # Кнопка с номером текущей страницы
-    pagination_row.append(
-        InlineKeyboardButton(
-            text=f"{page}/{total_pages}",
-            callback_data="ignore"  # Эта кнопка не должна ничего делать
+    if total_pages > 0 : # Отображаем только если есть страницы
+        pagination_row.append(
+            InlineKeyboardButton(
+                text=f"{page}/{total_pages}",
+                callback_data="ignore"  # Эта кнопка не должна ничего делать
+            )
         )
-    )
     
     # Кнопка "Следующая страница"
     if page < total_pages:
@@ -117,8 +119,9 @@ def get_items_keyboard(items: list, category_name: str, page: int = 1, items_per
             )
         )
     
-    # Добавляем кнопки пагинации в отдельный ряд
-    builder.row(*pagination_row)
+    # Добавляем кнопки пагинации в отдельный ряд, если они есть
+    if pagination_row:
+        builder.row(*pagination_row)
     
     # Добавляем кнопку "Назад в каталог" в отдельный ряд
     builder.row(InlineKeyboardButton(
@@ -128,17 +131,18 @@ def get_items_keyboard(items: list, category_name: str, page: int = 1, items_per
     
     return builder.as_markup()
 
-def get_catalog_keyboard(categories: list) -> InlineKeyboardMarkup:
+def get_catalog_keyboard(categories: list = None) -> InlineKeyboardMarkup:
     """Создает клавиатуру с категориями товаров."""
     builder = InlineKeyboardBuilder()
     
-    # Добавляем кнопки категорий в столбик
-    for category in categories:
-        builder.row(InlineKeyboardButton(
-            text=category['name'],
-            callback_data=f"category:{category['name']}:page:1"
-        ))
-    
+    if categories:
+        # Добавляем кнопки категорий в столбик
+        for category in categories:
+            builder.row(InlineKeyboardButton(
+                text=category['name'],
+                callback_data=f"category:{category['name']}:page:1"
+            ))
+
     # Добавляем кнопку "Назад в главное меню" в отдельный ряд
     builder.row(InlineKeyboardButton(
         text="◀️ Назад в главное меню",
@@ -182,47 +186,100 @@ def get_item_cart_keyboard(item_id: str, user_id: int, item_data: dict) -> Inlin
                 InlineKeyboardButton(text="+1", callback_data=f"cart:increase:{item_id}:1"),
                 InlineKeyboardButton(text="+10", callback_data=f"cart:increase:{item_id}:10")
             )
-    else:
+    elif item_data['unit'] == app_config.ITEM_UNIT_ML: # Явно проверяем МЛ
         # Для товаров в миллилитрах
         if current_quantity > 0:
             # Показываем кнопку сброса только если товар в корзине
             builder.row(InlineKeyboardButton(text="Сбросить", callback_data=f"cart:reset:{item_id}"))
         
         # Добавляем кнопки с шагами заказа
-        order_steps = item_data.get('order_steps', [1, 2, 3, 5, 10, 15, 20])
+        # item_data['order_steps'] будет списком (возможно, пустым) из requests.py
+        specific_order_steps = item_data.get('order_steps')
+
+        # Используем specific_order_steps, если они не пустые, иначе используем шаги по умолчанию
+        if specific_order_steps and isinstance(specific_order_steps, list) and len(specific_order_steps) > 0:
+            order_steps_to_use = specific_order_steps
+            logger.debug(f"Using specific order steps for ML item {item_id}: {specific_order_steps}")
+        else:
+            order_steps_to_use = [1, 2, 3, 5, 10, 15, 20] # Шаги по умолчанию для Мл
+            logger.info(f"For ML item {item_id}, specific order_steps were '{specific_order_steps}'. Using default steps: {order_steps_to_use}.")
+        
         buttons = []
-        for step in order_steps:
+        for step in order_steps_to_use:
+            # Отображаем целые числа без ".0"
+            step_text = str(int(step)) if isinstance(step, float) and step.is_integer() else str(step)
             buttons.append(InlineKeyboardButton(
-                text=f"+{step}",
-                callback_data=f"cart:increase:{item_id}:{step}"
+                text=f"+{step_text}",
+                callback_data=f"cart:increase:{item_id}:{step}" # callback_data может содержать float
             ))
-        builder.row(*buttons)
-    
+        
+        if buttons: # Добавляем ряд, только если кнопки были созданы
+            builder.row(*buttons)
+        else:
+            # Эта ситуация теперь маловероятна, так как есть order_steps_to_use по умолчанию
+            logger.warning(f"No order step buttons generated for Мл item {item_id}. Steps evaluated: {order_steps_to_use}")
+
+    else: # Если единица измерения не Шт и не Мл
+        logger.warning(f"Unknown unit type '{item_data['unit']}' for item {item_id}. No cart management buttons generated.")
+
+
     # Добавляем кнопку корзины
     builder.row(InlineKeyboardButton(text="🛒 Корзина", callback_data="cart"))
     
     # Добавляем кнопку возврата в категорию
-    builder.row(InlineKeyboardButton(
-        text="◀️ Назад к категории",
-        callback_data=f"category:{item_data['category_name']}:page:1"
-    ))
-    
+    category_name_for_back = item_data.get('category_name', '')
+    if category_name_for_back: # Только если имя категории есть
+        builder.row(InlineKeyboardButton(
+            text="◀️ Назад к категории",
+            callback_data=f"category:{category_name_for_back}:page:1" # По умолчанию на 1ю страницу
+        ))
+    else: # Если нет имени категории, кнопка "Назад в каталог"
+        builder.row(InlineKeyboardButton(
+            text="◀️ Назад в каталог",
+            callback_data="catalog"
+        ))
+
     return builder.as_markup()
 
-def get_cart_items_keyboard(cart_items: list) -> InlineKeyboardMarkup:
+def get_cart_items_keyboard(cart_items: list = None) -> InlineKeyboardMarkup:
     """Создает клавиатуру со списком товаров в корзине."""
     builder = InlineKeyboardBuilder()
     
-    for item in cart_items:
-        builder.row(InlineKeyboardButton(
-            text=f"❌ {item['name']} - {item['quantity']} {item['unit']}",
-            callback_data=f"cart:remove:{item['id']}"
-        ))
-    
-    # Добавляем кнопки управления корзиной
-    builder.row(
+    if cart_items:
+        for item in cart_items:
+            builder.row(InlineKeyboardButton(
+                text=f"❌ {item['name']} - {item['quantity']} {item['unit']}",
+                callback_data=f"cart:remove:{item['id']}"
+            ))
+        builder.row(
         InlineKeyboardButton(text="🗑 Очистить корзину", callback_data="cart:clear"),
+        InlineKeyboardButton(text="Заказать", callback_data="order"),
         InlineKeyboardButton(text="◀️ Назад", callback_data="start")
     )
+    # Добавляем кнопки управления корзиной
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="start")
+    )
+    
+    return builder.as_markup()
+
+def get_admin_keyboard() -> InlineKeyboardMarkup:
+    """Создает клавиатуру для администратора."""
+    builder = InlineKeyboardBuilder()
+    
+    builder.row(InlineKeyboardButton(
+        text="📊 Статистика",
+        callback_data="admin:stats"
+    ))
+    
+    builder.row(InlineKeyboardButton(
+        text="🔄 Синхронизация",
+        callback_data="admin:sync"
+    ))
+    
+    builder.row(InlineKeyboardButton(
+        text="◀️ Назад",
+        callback_data="start"
+    ))
     
     return builder.as_markup()

@@ -19,7 +19,8 @@ from app.keyboards import (
     get_items_keyboard,
     get_cart_keyboard,
     get_item_cart_keyboard,
-    get_cart_items_keyboard
+    get_cart_items_keyboard,
+    get_admin_keyboard
 )
 from app import config as app_config
 
@@ -32,13 +33,16 @@ async def cmd_start(message: Message):
         await rq.set_user(message.from_user.id)
         privacy_accepted = await rq.get_user_privacy_status(message.from_user.id)
         
+        # Отправляем приветственное сообщение
+        await message.answer(app_config.WELCOME_MESSAGE)
+        
         if not privacy_accepted:
             await message.answer(
                 'Для использования бота необходимо согласиться с политикой конфиденциальности.',
                 reply_markup=privacy_keyboard
             )
         else:
-            await message.answer('Добро пожаловать в IT Shop!', reply_markup=menu_keyboard)
+            await message.answer('Добро пожаловать в Perfume Shop!', reply_markup=menu_keyboard)
     except Exception as e:
         logger.error(f"Error in cmd_start for user {message.from_user.id}: {e}", exc_info=True)
         await message.answer("Произошла ошибка при обработке вашего запроса. Попробуйте позже.")
@@ -122,8 +126,14 @@ async def category_items_handler(callback: CallbackQuery):
     # Формируем текст сообщения
     message_text = f"Категория: {category_name}\n\nВыберите товар:"
     
-    # Обновляем сообщение
-    await callback.message.edit_text(message_text, reply_markup=keyboard)
+    # Проверяем, есть ли у текущего сообщения изображение
+    if callback.message.photo:
+        # Если есть изображение, отправляем новое сообщение и удаляем старое
+        await callback.message.answer(message_text, reply_markup=keyboard)
+        await callback.message.delete()
+    else:
+        # Если нет изображения, редактируем существующее сообщение
+        await callback.message.edit_text(message_text, reply_markup=keyboard)
 
 @router.callback_query(F.data == "ignore")
 async def ignore_handler(callback: CallbackQuery):
@@ -194,13 +204,17 @@ async def item_handler(callback: CallbackQuery):
         await callback.message.answer("Не удалось загрузить информацию о товаре.")
         await callback.answer("Ошибка загрузки", show_alert=True)
 
-@router.callback_query(F.data == 'contacts')
+@router.callback_query(F.data == 'about')
 async def contacts_handler(callback: CallbackQuery):
     logger.info(f"User {callback.from_user.id} pressed button: {callback.data}")
     if not await check_privacy_accepted(callback):
         return
     await callback.answer('')
-    await callback.message.answer("Наши контакты: @your_support_contact\nПочта: support@example.com")
+    keyboard = get_catalog_keyboard()
+    await callback.message.edit_text(
+        app_config.ABOUT,
+        reply_markup=keyboard
+    )
 
 @router.callback_query(F.data == 'start')
 async def back_to_main_menu_handler(callback: CallbackQuery):
@@ -209,7 +223,7 @@ async def back_to_main_menu_handler(callback: CallbackQuery):
         return
     try:
         await callback.answer('')
-        await callback.message.edit_text('Добро пожаловать в IT Shop!', reply_markup=menu_keyboard)
+        await callback.message.edit_text('Добро пожаловать в Perfume Shop!', reply_markup=menu_keyboard)
     except Exception as e:
         logger.error(f"Error in back_to_main_menu_handler: {e}", exc_info=True)
         await callback.message.answer("Произошла ошибка. Попробуйте позже.")
@@ -223,34 +237,33 @@ async def cart_handler(callback: CallbackQuery):
         return
     
     cart = cart_cache.get_cart(callback.from_user.id)
-    if not cart:
+    if cart:
+        # Получаем информацию о товарах в корзине
+        cart_items = []
+        total_price = 0
+        for item_id, quantity in cart.items():
+            item_data = await rq.get_item(item_id)
+            if item_data:
+                cart_items.append({
+                    'id': item_id,
+                    'name': item_data['name'],
+                    'quantity': quantity,
+                    'unit': item_data['unit'],
+                    'price': item_data['price']
+                })
+                total_price += item_data['price'] * quantity
+        
+        # Формируем текст сообщения
+        text = "<b>🛒 Ваша корзина:</b>\n\n"
+        for item in cart_items:
+            text += f"• {item['name']} - {item['quantity']} {item['unit']} ({item['price'] * item['quantity']:.2f} руб.)\n"
+        text += f"\n<b>Итого:</b> {total_price:.2f} руб."
+    else:
         await callback.message.edit_text(
-            "Ваша корзина пуста.",
-            reply_markup=menu_keyboard
-        )
+        "Ваша корзина пуста.",
+        reply_markup=get_cart_items_keyboard(),
+        parse_mode="HTML")
         return
-    
-    # Получаем информацию о товарах в корзине
-    cart_items = []
-    total_price = 0
-    for item_id, quantity in cart.items():
-        item_data = await rq.get_item(item_id)
-        if item_data:
-            cart_items.append({
-                'id': item_id,
-                'name': item_data['name'],
-                'quantity': quantity,
-                'unit': item_data['unit'],
-                'price': item_data['price']
-            })
-            total_price += item_data['price'] * quantity
-    
-    # Формируем текст сообщения
-    text = "<b>🛒 Ваша корзина:</b>\n\n"
-    for item in cart_items:
-        text += f"• {item['name']} - {item['quantity']} {item['unit']} ({item['price'] * item['quantity']:.2f} руб.)\n"
-    text += f"\n<b>Итого:</b> {total_price:.2f} руб."
-    
     # Отправляем сообщение с клавиатурой
     await callback.message.edit_text(
         text,
@@ -348,3 +361,38 @@ async def cart_action_handler(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Error in cart_action_handler: {e}", exc_info=True)
         await callback.answer("Произошла ошибка при обработке действия с корзиной", show_alert=True)
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь администратором."""
+    return user_id in app_config.ADMIN_IDS
+@router.message(Command("admin"))
+async def admin_command(message: Message):
+    """Обработчик команды /admin."""
+    if not is_admin(message.from_user.id):
+        return
+    
+    await message.answer(
+        "Панель администратора",
+        reply_markup=get_admin_keyboard()
+    )
+
+@router.callback_query(lambda c: c.data.startswith("admin:"))
+async def process_admin_callback(callback: CallbackQuery):
+    """Обработчик callback-запросов от админ-кнопок."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("У вас нет доступа к этой функции.", show_alert=True)
+        return
+    
+    action = callback.data.split(":")[1]
+    
+    if action == "stats":
+        await callback.message.edit_text(
+            "📊 Статистика\n\nФункция в разработке...",
+            reply_markup=get_admin_keyboard()
+        )
+    elif action == "sync":
+        await callback.message.edit_text(
+            "🔄 Синхронизация\n\nФункция в разработке...",
+            reply_markup=get_admin_keyboard()
+        )
+    
+    await callback.answer()

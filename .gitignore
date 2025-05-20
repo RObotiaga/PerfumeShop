@@ -7,3 +7,13 @@ app/database/__pycache__/requests.cpython-310.pyc
 .env
 bot.log
 credentials.json
+.idea/misc.xml
+.idea/modules.xml
+.idea/PerfumeShop.iml
+.idea/vcs.xml
+.idea/workspace.xml
+.idea/inspectionProfiles/profiles_settings.xml
+.idea/inspectionProfiles/Project_Default.xml
+app/__pycache__/background_tasks.cpython-310.pyc
+app/__pycache__/handlers_order.cpython-310.pyc
+app/__pycache__/keyboards_order.cpython-310.pyc
