@@ -30,7 +30,7 @@ async def main():
     if not all(
         [
             app_config.GSHEETS_USERS_URI,
-            app_config.GSHEETS_CATEGORIES_URI,
+            # app_config.GSHEETS_CATEGORIES_URI,
             app_config.GSHEETS_ITEMS_URI,
         ]
     ):
@@ -44,25 +44,35 @@ async def main():
         logger.critical("Токен бота TG_TOKEN не найден. Проверьте .env файл.")
         return
 
-    # --- Инициализация структуры Google Sheets ---
-    try:
-        # Вызываем функцию настройки перед запуском бота
-        await ensure_google_sheets_setup()
-        # Синхронизируем кэш согласий с Google Sheets
-        await sync_privacy_cache()
-        # Синхронизируем кэш каталога
-        await sync_catalog_cache()
-    except Exception as e:
-        # Логируем ошибку, но позволяем боту запуститься, если это некритично,
-        # или прерываем, если настройка таблиц обязательна.
-        # Для данного случая, если таблицы не настроены, бот скорее всего не сможет работать корректно.
-        logger.error(
-            f"Критическая ошибка во время настройки Google Sheets: {e}. "
-            "Бот может работать некорректно или не запуститься.",
-            exc_info=True,
-        )
-        # Если настройка таблиц критична, можно раскомментировать следующую строку:
-        # return
+    # --- Инициализация структуры Google Sheets и кеша ---
+    max_retries = 3
+    retry_delay = 5  # секунд
+
+    for attempt in range(max_retries):
+        try:
+            # Вызываем функцию настройки перед запуском бота
+            await ensure_google_sheets_setup()
+            # Синхронизируем кэш согласий с Google Sheets
+            await sync_privacy_cache()
+            # Синхронизируем кэш каталога
+            await sync_catalog_cache()
+            logger.info(
+                "Google Sheets setup and cache initialization completed successfully"
+            )
+            break
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"Attempt {attempt + 1}/{max_retries} failed: {e}. Retrying in {retry_delay} seconds..."
+                )
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error(
+                    f"Failed to initialize Google Sheets and cache after {max_retries} attempts: {e}. "
+                    "Bot may not function correctly.",
+                    exc_info=True,
+                )
+
     # ---------------------------------------------
 
     bot = Bot(token=bot_token)

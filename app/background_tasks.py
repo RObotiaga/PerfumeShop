@@ -9,6 +9,7 @@ from app.database.cache import privacy_cache, catalog_cache
 
 logger = logging.getLogger(__name__)
 
+
 class BackgroundTasks:
     def __init__(self):
         self._privacy_sync_task: Optional[asyncio.Task] = None
@@ -35,37 +36,36 @@ class BackgroundTasks:
             return
 
         self._is_running = False
-        
+
         if self._privacy_sync_task:
             self._privacy_sync_task.cancel()
             try:
                 await self._privacy_sync_task
             except asyncio.CancelledError:
                 pass
-        
+
         if self._catalog_sync_task:
             self._catalog_sync_task.cancel()
             try:
                 await self._catalog_sync_task
             except asyncio.CancelledError:
                 pass
-        
+
         logger.info("Background tasks stopped")
 
     async def _sync_privacy_periodically(self):
-        """Периодически синхронизирует кеш конфиденциальности."""
         while self._is_running:
             try:
-                current_time = datetime.now()
-                if current_time - self._last_privacy_sync >= self._sync_interval:
-                    await sync_privacy_cache()
-                    self._last_privacy_sync = current_time
-                    logger.info("Privacy cache synchronized successfully")
+                await sync_privacy_cache()
+                logger.info("Privacy cache synchronized successfully by periodic task")
             except Exception as e:
                 logger.error(f"Error synchronizing privacy cache: {e}", exc_info=True)
-            
-            # Ждем 1 минуту перед следующей проверкой
-            await asyncio.sleep(60)
+
+            try:
+                await asyncio.sleep(self._sync_interval.total_seconds())
+            except asyncio.CancelledError:
+                logger.info("Privacy sync task cancelled.")
+                break  # Выходим из цикла при отмене
 
     async def _sync_catalog_periodically(self):
         """Периодически синхронизирует кеш каталога."""
@@ -78,9 +78,14 @@ class BackgroundTasks:
                     logger.info("Catalog cache synchronized successfully")
             except Exception as e:
                 logger.error(f"Error synchronizing catalog cache: {e}", exc_info=True)
-            
+
             # Ждем 1 минуту перед следующей проверкой
-            await asyncio.sleep(60)
+            try:
+                await asyncio.sleep(60)  # Проверяем каждую минуту
+            except asyncio.CancelledError:
+                logger.info("Catalog sync task cancelled.")
+                break
+
 
 # Создаем глобальный экземпляр для управления фоновыми задачами
-background_tasks = BackgroundTasks() 
+background_tasks = BackgroundTasks()
